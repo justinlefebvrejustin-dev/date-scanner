@@ -10,7 +10,7 @@ import tempfile
 # ==========================================
 # 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner 4", page_icon="📅")
+st.set_page_config(page_title="Date Scanner 3", page_icon="📅")
 API_KEY = "AIzaSyALqJ7iSB7Ifhy" + "_Ym-b7Hkks5dpMava18I"
 genai.configure(api_key=API_KEY)
 
@@ -44,7 +44,7 @@ st.title("📅 Date Scanner")
 def load_tflite_model():
     interpreter = None
     labels = []
-    model_path = "model_unquantized.tflite"
+    model_path = "model_unquant.tflite"  # GEFIXED: juiste bestandsnaam!
     try:
         if os.path.exists(model_path):
             # TFLite Interpreter is veel lichter en stabieler
