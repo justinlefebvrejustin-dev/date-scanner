@@ -12,7 +12,7 @@ import re
 # ==========================================
 # 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
+st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
 
 TIPS_DB = {
     "Butter": "Check the top of the lid.",
@@ -38,28 +38,30 @@ st.markdown("""
 st.title("📅 Date Scanner")
 
 # ==========================================
-# 2. HULPFUNCTIES (Mensentaal & Modellen)
+# 2. SMART DATE FORMATTER
 # ==========================================
-def format_date_to_human(date_str):
-    """Zet 12/10/2025 om naar 'The twelfth of October twenty twenty-five'"""
+def get_human_date(text):
+    """Checks for logical dates and converts to natural English speech."""
     months = ["", "January", "February", "March", "April", "May", "June", 
               "July", "August", "September", "October", "November", "December"]
     
-    # Zoek naar dag, maand en jaar
-    match = re.search(r'(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})', date_str)
-    if match:
-        d, m, y = match.groups()
-        day = int(d)
-        month = int(m)
-        year = y if len(y) == 4 else f"20{y}"
-        
-        # Simpele ordinalen voor de dag
-        if 11 <= day <= 13: suffix = "th"
-        else: suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-        
-        if 1 <= month <= 12:
-            return f"the {day}{suffix} of {months[month]}, {year}"
-    return date_str
+    # Pattern for DD-MM-YYYY or DD-MM-YY
+    full_date = re.search(r'(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})', text)
+    if full_date:
+        d, m, y = map(int, full_date.groups())
+        year = y if y > 100 else 2000 + y
+        if 1 <= d <= 31 and 1 <= m <= 12:
+            suffix = "th" if 11 <= d <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(d % 10, "th")
+            return f"the {d}{suffix} of {months[m]}, {year}", f"{d}/{m}/{year}"
+
+    # Pattern for MM-YYYY (e.g. 12/2026)
+    short_date = re.search(r'(\d{1,2})[./-](\d{4})', text)
+    if short_date:
+        m, y = map(int, short_date.groups())
+        if 1 <= m <= 12:
+            return f"{months[m]}, {y}", f"{m}/{y}"
+            
+    return None, None
 
 @st.cache_resource
 def load_models():
@@ -82,43 +84,37 @@ reader, interpreter, class_names = load_models()
 img_file = st.camera_input("Scan", label_visibility="collapsed")
 
 if img_file:
-    # Voorbereiding afbeelding
     file_bytes = np.asarray(bytearray(img_file.read()), dtype=np.uint8)
     image_cv = cv2.imdecode(file_bytes, 1)
     image_pil = Image.fromarray(cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB))
     
     date_found = False
-    date_text = ""
+    display_date = ""
     spoken_date = ""
 
     with st.spinner('Scanning...'):
         try:
-            # Stap 1: OCR
             results = reader.readtext(image_cv)
             for (bbox, text, prob) in results:
-                # We zoeken specifiek naar patronen die op een datum lijken
-                if any(c.isdigit() for c in text) and len(text) >= 5:
-                    match = re.search(r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(\d{1,2}[./-]\d{2,4})', text)
-                    if match:
-                        date_text = match.group(0)
-                        spoken_date = format_date_to_human(date_text)
-                        date_found = True
-                        break
+                human_text, clean_date = get_human_date(text)
+                if human_text:
+                    spoken_date = human_text
+                    display_date = clean_date
+                    date_found = True
+                    break 
         except: pass
 
-    # STAP 2: Resultaat tonen
     if date_found:
         st.markdown(f'''<div class="success-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Status</div>
-            <div style="color:white;font-size:1.6em;font-weight:bold;">Date Found</div>
+            <div style="color:white;font-size:1.6em;font-weight:bold;">Date Detected</div>
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div>
-            <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div>
-            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Scanner ready</div>
+            <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{display_date}</div>
         </div>''', unsafe_allow_html=True)
         speak_text = f"The expiration date is {spoken_date}"
         
     else:
-        # Stap 3: Teachable Machine (Productherkenning voor tips)
+        # Fallback to Teachable Machine
         size = (224, 224)
         image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
         image_array = np.asarray(image_resized).astype(np.float32)
@@ -144,11 +140,11 @@ if img_file:
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div>
             <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ No date found</div>
-            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 {tip}</p>
+            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 Tip: {tip}</p>
         </div>''', unsafe_allow_html=True)
         speak_text = f"I see {product_name}, but no date. {tip}"
 
-    # AUDIO UITVOER
+    # AUDIO OUTPUT
     try:
         tts = gTTS(speak_text, lang='en', tld='com')
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
