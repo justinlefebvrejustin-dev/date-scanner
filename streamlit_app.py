@@ -9,9 +9,9 @@ import tempfile
 import re
 
 # ==========================================
-# 1. SETUP & STYLE (Originele Mobiele Versie)
+# 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
+st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
 API_KEY = "AIzaSyBdkCUwIwyY" + "V9Jcu5_ucm3In9A9Z_vx5b4"
 genai.configure(api_key=API_KEY)
 
@@ -32,6 +32,7 @@ st.markdown("""
     div[data-testid="stCameraInput"] { border-radius: 20px; border: 2px solid #333; overflow: hidden; }
     .success-box { background: #1f2937; border-left: 8px solid #16a34a; padding: 20px; border-radius: 15px; margin-top: 20px; }
     .error-box { background: #1f2937; border-left: 8px solid #dc2626; padding: 20px; border-radius: 15px; margin-top: 20px; }
+    .debug-box { background: #111; border: 1px dashed #444; padding: 10px; border-radius: 10px; margin-top: 20px; font-family: monospace; font-size: 0.8em; color: #aaa; }
     audio { display: none; }
     </style>
     """, unsafe_allow_html=True)
@@ -63,61 +64,55 @@ interpreter, class_names = load_tflite_model()
 img_file = st.camera_input("Scan", label_visibility="collapsed")
 
 if img_file:
-    # We gebruiken de originele hoge resolutie voor Gemini OCR
     image_pil = Image.open(img_file).convert('RGB')
     
     date_found = False
     date_text = ""
     product_name_from_ai = ""
+    raw_ai_output = "" # Voor diagnose
     
-    with st.spinner('Scanning text for dates...'):
-        # We proberen de stabiele modellen in een loop om 404 te voorkomen
+    with st.spinner('Deep scanning image...'):
         test_models = ['gemini-1.5-flash', 'gemini-pro-vision']
-        response_text = ""
         
         for model_name in test_models:
             try:
                 model = genai.GenerativeModel(model_name)
-                # Een veel krachtigere prompt voor OCR (tekstherkenning)
-                prompt = """TASK: OCR Data Extraction.
-                1. Scan all text in the image. 
-                2. Find the expiration date (Expiratie, THT, EXP, Best Before).
-                3. Identify the product name.
+                # Verbeterde prompt: we vragen de AI eerst alles te transcriberen
+                prompt = """Analyze this image step by step:
+                1. Transcribe ALL text you see on the packaging.
+                2. Out of that text, identify the expiration date (THT, EXP, or just a date).
+                3. Identify the product.
 
-                OUTPUT FORMAT:
+                Provide your final answer at the very end in this exact format:
                 PRODUCT: [name]
-                DATE: [the exact date text found]
-                
-                Note: If you only see a date like '12/2025' or '15-08', that is the DATE.
-                If NO date is visible, respond DATE: NULL."""
+                DATE: [date]"""
                 
                 res = model.generate_content([prompt, image_pil])
                 if res and res.text:
-                    response_text = res.text
+                    raw_ai_output = res.text
                     break
-            except:
+            except Exception as e:
+                raw_ai_output = f"Model {model_name} error: {str(e)}"
                 continue
 
-        if response_text:
-            # Verbeterde parsing
-            lines = response_text.split('\n')
-            for line in lines:
+        if raw_ai_output:
+            # Parsing van de PRODUCT en DATE velden
+            for line in raw_ai_output.split('\n'):
                 clean_line = line.replace('*', '').strip()
                 if 'PRODUCT:' in clean_line.upper():
                     product_name_from_ai = clean_line.split(':', 1)[1].strip()
                 if 'DATE:' in clean_line.upper():
                     val = clean_line.split(':', 1)[1].strip()
-                    # Check of de waarde een datum-achtig karakter heeft (cijfers)
                     if val.upper() != 'NULL' and any(c.isdigit() for c in val):
                         date_text = val
                         date_found = True
             
-            # EXTRA CHECK: Als 'DATE:' niet werkte maar er staat wel een datum in de tekst
+            # Backup: als we de format niet vinden, zoek dan met Regex in de hele tekst
             if not date_found:
-                # Zoek naar patronen als XX/XX/XXXX of XX-XX-XX
-                date_pattern = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', response_text)
-                if date_pattern:
-                    date_text = date_pattern.group(1)
+                # Zoekt naar patronen zoals 12/2025, 12-2025, 12.2025
+                pattern = re.search(r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(\d{1,2}[./-]\d{2,4})', raw_ai_output)
+                if pattern:
+                    date_text = pattern.group(0)
                     date_found = True
 
     # STAP 2: Resultaat tonen
@@ -128,13 +123,10 @@ if img_file:
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_display}</div>
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div>
             <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div>
-            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Date extracted</div>
         </div>''', unsafe_allow_html=True)
-        
         speak_text = f"The date for this {product_display} is {date_text}"
-        
     else:
-        # GEEN DATUM - Overschakelen naar Teachable Machine
+        # Fallback naar Teachable Machine
         size = (224, 224)
         image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
         image_array = np.asarray(image_resized).astype(np.float32)
@@ -156,14 +148,13 @@ if img_file:
             except: pass
         
         tip = TIPS_DB.get(product_name, TIPS_DB["Background"])
-        
         st.markdown(f'''<div class="error-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div>
             <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ No Date Found</div>
-            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 Tip: {tip}</p>
+            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 {tip}</p>
         </div>''', unsafe_allow_html=True)
-        speak_text = f"I see {product_name}, but I can't find a date. {tip}"
+        speak_text = f"I see {product_name}. {tip}"
 
     # AUDIO
     try:
@@ -172,3 +163,10 @@ if img_file:
             tts.save(fp.name)
             st.audio(fp.name, format="audio/mp3", autoplay=True)
     except: pass
+
+    # ==========================================
+    # 4. DIAGNOSE CONSOLE (Enkel zichtbaar na scan)
+    # ==========================================
+    with st.expander("🛠️ Diagnose: Wat ziet de AI?"):
+        st.write("Hieronder zie je de letterlijke tekst die Gemini terugstuurt:")
+        st.code(raw_ai_output if raw_ai_output else "Geen antwoord van AI")
