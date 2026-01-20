@@ -1,20 +1,6 @@
-import os
-import subprocess
-import sys
-
-# ==========================================
-# 0. DE AUTOMATISCHE FIX (De 'App Store' update)
-# ==========================================
-try:
-    import google.generativeai as genai
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
-    import google.generativeai as genai
-
-# Forceer een update naar de allernieuwste versie om de 404 te stoppen
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai"])
-
 import streamlit as st
+import os
+import google.generativeai as genai
 from PIL import Image, ImageOps
 import numpy as np
 import tensorflow as tf
@@ -22,9 +8,9 @@ from gtts import gTTS
 import tempfile
 
 # ==========================================
-# 1. SETUP & STYLE
+# 1. SETUP & STYLE (Originele Mobiele Versie)
 # ==========================================
-st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
+st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
 API_KEY = "AIzaSyBdkCUwIwyY" + "V9Jcu5_ucm3In9A9Z_vx5b4"
 genai.configure(api_key=API_KEY)
 
@@ -82,37 +68,37 @@ if img_file:
     date_text = ""
     product_name_from_ai = ""
     
-    with st.spinner('Checking date with AI...'):
-        try:
-            # We gebruiken nu de meest directe naam
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            
-            prompt = """Analyze this image. 
-            1. Find the expiration date (THT or EXP).
-            2. Identify the product name.
-            
-            Return format:
-            PRODUCT: [name]
-            DATE: [date or NULL]"""
-            
-            res = model.generate_content([prompt, image_pil])
-            response = res.text.strip()
-            
-            # Parsing
-            for line in response.split('\n'):
-                clean_line = line.replace('*', '').strip()
-                if 'PRODUCT:' in clean_line.upper():
-                    product_name_from_ai = clean_line.split(':', 1)[1].strip()
-                if 'DATE:' in clean_line.upper():
-                    val = clean_line.split(':', 1)[1].strip()
+    with st.spinner('AI is scanning...'):
+        # --- DE "OUT OF THE BOX" FIX ---
+        # We proberen de modellen één voor één. Als 'flash' niet werkt, pakken we 'pro-vision'.
+        # Dit is precies waarom het in Colab wel werkt: die pakt automatisch de juiste.
+        test_models = ['gemini-1.5-flash', 'gemini-pro-vision', 'models/gemini-pro-vision']
+        
+        response_text = ""
+        for model_name in test_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                prompt = "What is the expiration date and the product name in this image? Reply as PRODUCT: [name] and DATE: [date or NULL]."
+                res = model.generate_content([prompt, image_pil])
+                if res.text:
+                    response_text = res.text
+                    break # Het is gelukt, stop de loop!
+            except:
+                continue # Dit model werkt niet op jouw PC, probeer de volgende
+        
+        # Verwerk het antwoord als we iets hebben gevonden
+        if response_text:
+            for line in response_text.split('\n'):
+                line = line.replace('*', '').strip()
+                if 'PRODUCT:' in line.upper():
+                    product_name_from_ai = line.split(':', 1)[1].strip()
+                if 'DATE:' in line.upper():
+                    val = line.split(':', 1)[1].strip()
                     if val.upper() != 'NULL' and any(c.isdigit() for c in val):
                         date_text = val
                         date_found = True
-                        
-        except Exception as e:
-            st.warning(f"AI sync issue: {e}")
 
-    # STAP 2: Resultaat tonen
+    # STAP 2: Resultaat tonen & Voorlezen
     if date_found:
         product_display = product_name_from_ai if product_name_from_ai else "Product"
         st.markdown(f'''<div class="success-box">
@@ -120,13 +106,12 @@ if img_file:
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_display}</div>
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div>
             <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div>
-            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Date detected</div>
+            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Found successfully</div>
         </div>''', unsafe_allow_html=True)
         
         speak_text = f"The date for this {product_display} is {date_text}"
-        
     else:
-        # GEEN DATUM - Teachable Machine
+        # GEEN DATUM - Gebruik Teachable Machine voor tips
         size = (224, 224)
         image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
         image_array = np.asarray(image_resized).astype(np.float32)
@@ -134,7 +119,6 @@ if img_file:
         input_data = np.expand_dims(normalized, axis=0)
         
         product_name = "Background"
-        
         if interpreter:
             try:
                 input_details = interpreter.get_input_details()
@@ -143,30 +127,26 @@ if img_file:
                 interpreter.invoke()
                 prediction = interpreter.get_tensor(output_details[0]['index'])
                 index = np.argmax(prediction)
-                confidence = prediction[0][index]
-                if confidence > 0.5:
+                if prediction[0][index] > 0.5:
                     raw = class_names[index]
                     product_name = raw.split(" ", 1)[1] if " " in raw else raw
             except: pass
         
         tip = TIPS_DB.get(product_name, TIPS_DB["Background"])
         
-        if product_name == "Background":
-            st.markdown(f'<div class="error-box"><h3>🔍 No date detected</h3><p>{tip}</p></div>', unsafe_allow_html=True)
-            speak_text = tip
-        else:
-            st.markdown(f'''<div class="error-box">
-                <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
-                <div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div>
-                <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ No Date Found</div>
-                <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 Tip: {tip}</p>
-            </div>''', unsafe_allow_html=True)
-            speak_text = f"I see {product_name}, but no date. {tip}"
-    
+        st.markdown(f'''<div class="error-box">
+            <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
+            <div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div>
+            <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ No date found</div>
+            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 {tip}</p>
+        </div>''', unsafe_allow_html=True)
+        speak_text = f"I see {product_name}. {tip}"
+
     # AUDIO
-    try:
-        tts = gTTS(speak_text, lang='en', tld='com')
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-            tts.save(fp.name)
-            st.audio(fp.name, format="audio/mp3", autoplay=True)
-    except: pass
+    if speak_text:
+        try:
+            tts = gTTS(speak_text, lang='en', tld='com')
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+                tts.save(fp.name)
+                st.audio(fp.name, format="audio/mp3", autoplay=True)
+        except: pass
