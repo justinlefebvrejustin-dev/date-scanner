@@ -11,7 +11,7 @@ import re
 # ==========================================
 # 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
+st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
 API_KEY = "AIzaSyBdkCUwIwyY" + "V9Jcu5_ucm3In9A9Z_vx5b4"
 genai.configure(api_key=API_KEY)
 
@@ -32,7 +32,7 @@ st.markdown("""
     div[data-testid="stCameraInput"] { border-radius: 20px; border: 2px solid #333; overflow: hidden; }
     .success-box { background: #1f2937; border-left: 8px solid #16a34a; padding: 20px; border-radius: 15px; margin-top: 20px; }
     .error-box { background: #1f2937; border-left: 8px solid #dc2626; padding: 20px; border-radius: 15px; margin-top: 20px; }
-    .debug-box { background: #111; border: 1px dashed #444; padding: 10px; border-radius: 10px; margin-top: 20px; font-family: monospace; font-size: 0.8em; color: #aaa; }
+    .debug-info { background: #262730; color: #ffeb3b; padding: 10px; border-radius: 5px; font-family: monospace; margin-top: 10px; border: 1px solid #ffeb3b; }
     audio { display: none; }
     </style>
     """, unsafe_allow_html=True)
@@ -69,51 +69,49 @@ if img_file:
     date_found = False
     date_text = ""
     product_name_from_ai = ""
-    raw_ai_output = "" # Voor diagnose
-    
-    with st.spinner('Deep scanning image...'):
-        test_models = ['gemini-1.5-flash', 'gemini-pro-vision']
-        
-        for model_name in test_models:
-            try:
-                model = genai.GenerativeModel(model_name)
-                # Verbeterde prompt: we vragen de AI eerst alles te transcriberen
-                prompt = """Analyze this image step by step:
-                1. Transcribe ALL text you see on the packaging.
-                2. Out of that text, identify the expiration date (THT, EXP, or just a date).
-                3. Identify the product.
+    full_ai_response = ""
 
-                Provide your final answer at the very end in this exact format:
-                PRODUCT: [name]
-                DATE: [date]"""
-                
-                res = model.generate_content([prompt, image_pil])
-                if res and res.text:
-                    raw_ai_output = res.text
-                    break
-            except Exception as e:
-                raw_ai_output = f"Model {model_name} error: {str(e)}"
-                continue
-
-        if raw_ai_output:
-            # Parsing van de PRODUCT en DATE velden
-            for line in raw_ai_output.split('\n'):
-                clean_line = line.replace('*', '').strip()
-                if 'PRODUCT:' in clean_line.upper():
-                    product_name_from_ai = clean_line.split(':', 1)[1].strip()
-                if 'DATE:' in clean_line.upper():
-                    val = clean_line.split(':', 1)[1].strip()
-                    if val.upper() != 'NULL' and any(c.isdigit() for c in val):
-                        date_text = val
-                        date_found = True
+    with st.spinner('Scanning for dates...'):
+        try:
+            # We gebruiken ALLEEN het nieuwste model om 404's van oude modellen te voorkomen
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
-            # Backup: als we de format niet vinden, zoek dan met Regex in de hele tekst
-            if not date_found:
-                # Zoekt naar patronen zoals 12/2025, 12-2025, 12.2025
-                pattern = re.search(r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(\d{1,2}[./-]\d{2,4})', raw_ai_output)
-                if pattern:
-                    date_text = pattern.group(0)
-                    date_found = True
+            # De prompt is nu extreem dwingend voor OCR
+            prompt = """Look at this image very closely. 
+            1. List EVERY piece of text you can read.
+            2. Specifically find any date like 'DD/MM/YY', 'MM-YYYY', or 'Best Before: ...'.
+            3. What is the product name?
+
+            Respond ONLY in this format:
+            PRODUCT: [name]
+            DATE: [found date or NULL]
+            RAW_TEXT: [all text you saw]"""
+            
+            res = model.generate_content([prompt, image_pil])
+            full_ai_response = res.text if res else ""
+            
+            # Slimme parsing
+            if full_ai_response:
+                lines = full_ai_response.split('\n')
+                for line in lines:
+                    clean = line.replace('*', '').strip()
+                    if clean.upper().startswith('PRODUCT:'):
+                        product_name_from_ai = clean.split(':', 1)[1].strip()
+                    if clean.upper().startswith('DATE:'):
+                        val = clean.split(':', 1)[1].strip()
+                        if val.upper() != 'NULL' and any(c.isdigit() for c in val):
+                            date_text = val
+                            date_found = True
+                
+                # Als DATE: NULL gaf, maar er staat wel een datum in de RAW_TEXT
+                if not date_found:
+                    # Zoek met een vangnet (Regex) in het hele antwoord
+                    found_dates = re.findall(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{2,4})', full_ai_response)
+                    if found_dates:
+                        date_text = found_dates[0]
+                        date_found = True
+        except Exception as e:
+            full_ai_response = f"Fout bij scannen: {str(e)}"
 
     # STAP 2: Resultaat tonen
     if date_found:
@@ -121,12 +119,12 @@ if img_file:
         st.markdown(f'''<div class="success-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_display}</div>
-            <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div>
+            <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Vervaldatum</div>
             <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div>
         </div>''', unsafe_allow_html=True)
-        speak_text = f"The date for this {product_display} is {date_text}"
+        speak_text = f"The date is {date_text}"
     else:
-        # Fallback naar Teachable Machine
+        # Teachable Machine tips
         size = (224, 224)
         image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
         image_array = np.asarray(image_resized).astype(np.float32)
@@ -151,10 +149,10 @@ if img_file:
         st.markdown(f'''<div class="error-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div>
-            <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ No Date Found</div>
-            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 {tip}</p>
+            <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ Geen datum gevonden</div>
+            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 Tip: {tip}</p>
         </div>''', unsafe_allow_html=True)
-        speak_text = f"I see {product_name}. {tip}"
+        speak_text = f"I see {product_name}, but no date. {tip}"
 
     # AUDIO
     try:
@@ -164,9 +162,7 @@ if img_file:
             st.audio(fp.name, format="audio/mp3", autoplay=True)
     except: pass
 
-    # ==========================================
-    # 4. DIAGNOSE CONSOLE (Enkel zichtbaar na scan)
-    # ==========================================
-    with st.expander("🛠️ Diagnose: Wat ziet de AI?"):
-        st.write("Hieronder zie je de letterlijke tekst die Gemini terugstuurt:")
-        st.code(raw_ai_output if raw_ai_output else "Geen antwoord van AI")
+    # DIAGNOSE (Staat nu onderaan voor jou om te zien wat er misgaat)
+    with st.expander("🛠️ AI Diagnose (Wat ziet Gemini?)", expanded=False):
+        st.write("De AI stuurde dit terug:")
+        st.text_area("Raw Response", full_ai_response, height=150)
