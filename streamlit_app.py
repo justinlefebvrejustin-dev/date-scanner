@@ -13,7 +13,7 @@ import base64
 # ==========================================
 # 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner V5 Pro", page_icon="📅")
+st.set_page_config(page_title="Date Recognition V7.2 Pro", page_icon="📅")
 
 TIPS_DB = {
     "Butter": "Check the top of the lid.",
