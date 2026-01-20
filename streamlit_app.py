@@ -29,7 +29,7 @@ TIPS_DB = {
 }
 
 # ==========================================
-# 3. FIX VOOR DEPTHWISECONV2D 🛠️
+# 3. FIX VOOR DE RODE ERROR (INPUT TENSORS) 🛠️
 # ==========================================
 class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
     def __init__(self, **kwargs):
@@ -60,7 +60,7 @@ st.markdown("""
     .success-box { background: #1f2937; border-left: 8px solid #16a34a; padding: 20px; border-radius: 15px; margin-top: 20px; }
     .error-box { background: #1f2937; border-left: 8px solid #dc2626; padding: 20px; border-radius: 15px; margin-top: 20px; }
     
-    /* Verberg audio player maar laat hem wel spelen */
+    /* Verberg audio player */
     audio { display: none; }
     </style>
     """, unsafe_allow_html=True)
@@ -68,7 +68,7 @@ st.markdown("""
 st.title("📅 Date Scanner")
 
 # ==========================================
-# 5. MODEL LADEN
+# 5. MODEL LADEN (AANGEPAST VOOR DE ERROR)
 # ==========================================
 @st.cache_resource
 def load_model():
@@ -76,9 +76,13 @@ def load_model():
     labels = []
     try:
         if os.path.exists("keras_model.h5"):
-            model = tf.keras.models.load_model("keras_model.h5", 
-                                             custom_objects={'DepthwiseConv2D': CustomDepthwiseConv2D},
-                                             compile=False)
+            # De fix: We laden het model in zonder de 'functional' wraps te forceren
+            # Dit voorkomt de 'expects 1 input, received 2' error
+            model = tf.keras.models.load_model(
+                "keras_model.h5", 
+                custom_objects={'DepthwiseConv2D': CustomDepthwiseConv2D},
+                compile=False
+            )
         if os.path.exists("labels.txt"):
             with open("labels.txt", "r") as f:
                 labels = [line.strip() for line in f.readlines()]
@@ -91,7 +95,6 @@ model, class_names = load_model()
 # ==========================================
 # 6. CAMERA & ANALYSE
 # ==========================================
-# label_visibility="collapsed" voor die strakke HTML-look
 img_file = st.camera_input("Scan Product", label_visibility="collapsed")
 
 if img_file is not None:
@@ -102,38 +105,41 @@ if img_file is not None:
     size = (224, 224)
     image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
     image_array = np.asarray(image_resized)
+    
+    # Normaliseren PRECIES zoals TM: van 0-255 naar -1 tot 1
     normalized = (image_array.astype(np.float32) / 127.5) - 1
-    data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
-    data[0] = normalized
+    data = np.expand_dims(normalized, axis=0) # Dit maakt de shape correct (1, 224, 224, 3)
 
     # B. HERKENNEN (Jouw Model)
     product_name = "Background"
     confidence = 0.0
     
     if model:
-        prediction = model.predict(data, verbose=0)
-        index = np.argmax(prediction)
-        confidence = prediction[0][index]
-        
-        if confidence > 0.5:
-            raw = class_names[index]
-            product_name = raw.split(" ", 1)[1] if " " in raw else raw
+        try:
+            # We voeren de voorspelling uit
+            prediction = model.predict(data, verbose=0)
+            index = np.argmax(prediction)
+            confidence = prediction[0][index]
+            
+            if confidence > 0.6: # Iets strenger voor minder fouten
+                raw = class_names[index]
+                product_name = raw.split(" ", 1)[1] if " " in raw else raw
+        except Exception as e:
+            st.error(f"Prediction Error: {e}")
 
     # C. DATUM ZOEKEN (Gemini)
     date_text = "NULL"
     if product_name != "Background":
-        with st.spinner('Reading date...'):
+        with st.spinner(f'Identifying {product_name}...'):
             try:
                 gemini = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = f"Product: {product_name}. Find EXPIRATION DATE. Reply ONLY date in English (e.g. 12 Oct 2025) or 'NULL'."
+                prompt = f"This image contains {product_name}. Find the EXPIRATION DATE. Reply ONLY the date in English or 'NULL' if not found."
                 res = gemini.generate_content([prompt, image_pil])
                 date_text = res.text.strip()
             except: pass
 
-    # D. OUTPUT & AUDIO GENERATIE
+    # D. OUTPUT & AUDIO
     found = "NULL" not in date_text and len(date_text) > 4
-    
-    # Haal de specifieke tekst uit jouw bibliotheek
     intro_text = TIPS_DB.get(product_name, TIPS_DB["Background"])
     
     if product_name == "Background":
@@ -142,7 +148,7 @@ if img_file is not None:
     elif found:
         st.markdown(f"""
         <div class="success-box">
-            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase; letter-spacing: 1px;">Product</div>
+            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase;">Product</div>
             <div style="color: white; font-size: 1.6em; font-weight: bold;">{product_name}</div>
             <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase; margin-top: 10px;">Expiration Date</div>
             <div style="color: #16a34a; font-size: 2.2em; font-weight: 900;">{date_text}</div>
@@ -156,16 +162,15 @@ if img_file is not None:
             <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase;">Product</div>
             <div style="color: white; font-size: 1.6em; font-weight: bold;">{product_name}</div>
             <div style="color: #dc2626; font-size: 1.5em; font-weight: bold; margin-top: 10px;">Date Not Found</div>
-            <div style="color: #fbbf24; margin-top: 5px; font-weight: bold;">💡 {intro_text}</div>
+            <div style="color: #fbbf24; margin-top: 5px; font-weight: bold;">💡 Tip: {intro_text}</div>
         </div>
         """, unsafe_allow_html=True)
-        speak_text = f"No date found. {intro_text}"
+        speak_text = f"Product identified as {product_name}, but no date was found. {intro_text}"
 
     # E. AUDIO (AUTOPLAY)
     try:
         tts = gTTS(speak_text, lang='en', tld='com')
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
             tts.save(fp.name)
-            # Autoplay=True zorgt voor direct afspelen
             st.audio(fp.name, format="audio/mp3", autoplay=True)
     except: pass
