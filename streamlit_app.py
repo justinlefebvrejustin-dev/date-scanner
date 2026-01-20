@@ -12,16 +12,16 @@ import tempfile
 # ==========================================
 st.set_page_config(page_title="Date Scanner", page_icon="📅")
 
-# API KEY (Normaal via secrets, maar voor nu hier hardcoded voor gemak)
+# API KEY
 API_KEY = "AIzaSyALqJ7iSB7Ifhy_Ym-b7Hkks5dpMava18I"
 genai.configure(api_key=API_KEY)
 
-# Custom CSS voor de "App Look"
+# Custom CSS
 st.markdown("""
     <style>
     .stApp { background-color: #000000; color: white; }
     h1 { color: #3b82f6; text-align: center; }
-    .stCameraInput { border-radius: 20px; border: 2px solid #333; }
+    div[data-testid="stCameraInput"] { border-radius: 20px; border: 2px solid #333; }
     div[data-testid="stImage"] img { border-radius: 15px; }
     .success-box { background: #1f2937; border-left: 6px solid #16a34a; padding: 20px; border-radius: 10px; margin-top: 10px; }
     .error-box { background: #1f2937; border-left: 6px solid #dc2626; padding: 20px; border-radius: 10px; margin-top: 10px; }
@@ -31,7 +31,7 @@ st.markdown("""
 st.title("📅 Date Scanner")
 
 # ==========================================
-# 2. MODEL LADEN (Caching voor snelheid)
+# 2. MODEL LADEN
 # ==========================================
 @st.cache_resource
 def load_model():
@@ -55,8 +55,8 @@ model, class_names = load_model()
 img_file = st.camera_input("Maak een foto", label_visibility="hidden")
 
 if img_file is not None:
-    # A. VOORBEREIDEN
-    image_pil = Image.from(img_file).convert('RGB')
+    # A. VOORBEREIDEN (HIER ZAT DE FOUT, NU GEFIXT)
+    image_pil = Image.open(img_file).convert('RGB')
     
     # Resize voor TM (224x224)
     size = (224, 224)
@@ -78,6 +78,7 @@ if img_file is not None:
             
             if confidence > 0.5:
                 raw = class_names[index]
+                # Haal nummers weg als die er zijn (bv "0 Melk")
                 product_name = raw.split(" ", 1)[1] if " " in raw else raw
 
         # C. DATUM (Gemini)
