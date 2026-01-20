@@ -11,7 +11,7 @@ import re
 # ==========================================
 # 1. SETUP & STYLE (Originele Mobiele Versie)
 # ==========================================
-st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
+st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
 API_KEY = "AIzaSyBdkCUwIwyY" + "V9Jcu5_ucm3In9A9Z_vx5b4"
 genai.configure(api_key=API_KEY)
 
