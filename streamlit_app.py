@@ -1,19 +1,18 @@
 import streamlit as st
 import os
-import google.generativeai as genai
-from PIL import Image, ImageOps
+import cv2
 import numpy as np
+import easyocr
+from PIL import Image, ImageOps
 import tensorflow as tf
 from gtts import gTTS
 import tempfile
 import re
 
 # ==========================================
-# 1. SETUP & STYLE
+# 1. SETUP & STYLE (Originele Mobiele Versie)
 # ==========================================
-st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
-API_KEY = "AIzaSyBdkCUwIwyY" + "V9Jcu5_ucm3In9A9Z_vx5b4"
-genai.configure(api_key=API_KEY)
+st.set_page_config(page_title="Date Scanner V5 - Local OCR", page_icon="📅")
 
 TIPS_DB = {
     "Butter": "Check the top of the lid.",
@@ -32,7 +31,6 @@ st.markdown("""
     div[data-testid="stCameraInput"] { border-radius: 20px; border: 2px solid #333; overflow: hidden; }
     .success-box { background: #1f2937; border-left: 8px solid #16a34a; padding: 20px; border-radius: 15px; margin-top: 20px; }
     .error-box { background: #1f2937; border-left: 8px solid #dc2626; padding: 20px; border-radius: 15px; margin-top: 20px; }
-    .debug-info { background: #262730; color: #ffeb3b; padding: 10px; border-radius: 5px; font-family: monospace; margin-top: 10px; border: 1px solid #ffeb3b; }
     audio { display: none; }
     </style>
     """, unsafe_allow_html=True)
@@ -40,8 +38,13 @@ st.markdown("""
 st.title("📅 Date Scanner")
 
 # ==========================================
-# 2. MODEL LADEN
+# 2. MODELLEN LADEN (Cached)
 # ==========================================
+@st.cache_resource
+def load_ocr_reader():
+    # Laadt de lokale OCR (Nederlands en Engels)
+    return easyocr.Reader(['nl', 'en'], gpu=False)
+
 @st.cache_resource
 def load_tflite_model():
     interpreter = None
@@ -56,6 +59,7 @@ def load_tflite_model():
     except: pass
     return interpreter, labels
 
+reader = load_ocr_reader()
 interpreter, class_names = load_tflite_model()
 
 # ==========================================
@@ -64,67 +68,48 @@ interpreter, class_names = load_tflite_model()
 img_file = st.camera_input("Scan", label_visibility="collapsed")
 
 if img_file:
-    image_pil = Image.open(img_file).convert('RGB')
+    # Converteren naar OpenCV formaat voor EasyOCR
+    file_bytes = np.asarray(bytearray(img_file.read()), dtype=np.uint8)
+    image_cv = cv2.imdecode(file_bytes, 1)
+    image_rgb = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
+    image_pil = Image.fromarray(image_rgb)
     
     date_found = False
     date_text = ""
-    product_name_from_ai = ""
-    full_ai_response = ""
+    all_detected_text = []
 
-    with st.spinner('Scanning for dates...'):
+    with st.spinner('Lokaal scannen naar datum...'):
         try:
-            # We gebruiken ALLEEN het nieuwste model om 404's van oude modellen te voorkomen
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # STAP 1: Lokale OCR uitvoeren
+            results = reader.readtext(image_cv)
             
-            # De prompt is nu extreem dwingend voor OCR
-            prompt = """Look at this image very closely. 
-            1. List EVERY piece of text you can read.
-            2. Specifically find any date like 'DD/MM/YY', 'MM-YYYY', or 'Best Before: ...'.
-            3. What is the product name?
-
-            Respond ONLY in this format:
-            PRODUCT: [name]
-            DATE: [found date or NULL]
-            RAW_TEXT: [all text you saw]"""
-            
-            res = model.generate_content([prompt, image_pil])
-            full_ai_response = res.text if res else ""
-            
-            # Slimme parsing
-            if full_ai_response:
-                lines = full_ai_response.split('\n')
-                for line in lines:
-                    clean = line.replace('*', '').strip()
-                    if clean.upper().startswith('PRODUCT:'):
-                        product_name_from_ai = clean.split(':', 1)[1].strip()
-                    if clean.upper().startswith('DATE:'):
-                        val = clean.split(':', 1)[1].strip()
-                        if val.upper() != 'NULL' and any(c.isdigit() for c in val):
-                            date_text = val
-                            date_found = True
+            # Alle gevonden tekst verzamelen
+            for (bbox, text, prob) in results:
+                all_detected_text.append(text)
                 
-                # Als DATE: NULL gaf, maar er staat wel een datum in de RAW_TEXT
-                if not date_found:
-                    # Zoek met een vangnet (Regex) in het hele antwoord
-                    found_dates = re.findall(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{2,4})', full_ai_response)
-                    if found_dates:
-                        date_text = found_dates[0]
-                        date_found = True
+                # Direct zoeken naar datum patronen (bv. 12/10/2025 of 12-2025)
+                # Deze Regex is zeer breed voor Europese datumnotaties
+                match = re.search(r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(\d{1,2}[./-]\d{2,4})', text)
+                if match:
+                    date_text = match.group(0)
+                    date_found = True
+                    break # We hebben een datum, stop met zoeken
         except Exception as e:
-            full_ai_response = f"Fout bij scannen: {str(e)}"
+            st.error(f"OCR Fout: {e}")
 
-    # STAP 2: Resultaat tonen
+    # STAP 2: RESULTAAT TONEN
     if date_found:
-        product_display = product_name_from_ai if product_name_from_ai else "Product"
         st.markdown(f'''<div class="success-box">
-            <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
-            <div style="color:white;font-size:1.6em;font-weight:bold;">{product_display}</div>
+            <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Status</div>
+            <div style="color:white;font-size:1.6em;font-weight:bold;">Datum Gevonden</div>
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Vervaldatum</div>
             <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div>
+            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Lokaal herkend</div>
         </div>''', unsafe_allow_html=True)
-        speak_text = f"The date is {date_text}"
+        speak_text = f"The expiration date is {date_text}"
+        
     else:
-        # Teachable Machine tips
+        # GEEN DATUM GEVONDEN -> Gebruik Teachable Machine voor Tips
         size = (224, 224)
         image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
         image_array = np.asarray(image_resized).astype(np.float32)
@@ -149,12 +134,12 @@ if img_file:
         st.markdown(f'''<div class="error-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div>
-            <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ Geen datum gevonden</div>
+            <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ Geen datum herkend</div>
             <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 Tip: {tip}</p>
         </div>''', unsafe_allow_html=True)
         speak_text = f"I see {product_name}, but no date. {tip}"
 
-    # AUDIO
+    # AUDIO VOORLEZEN
     try:
         tts = gTTS(speak_text, lang='en', tld='com')
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
@@ -162,7 +147,7 @@ if img_file:
             st.audio(fp.name, format="audio/mp3", autoplay=True)
     except: pass
 
-    # DIAGNOSE (Staat nu onderaan voor jou om te zien wat er misgaat)
-    with st.expander("🛠️ AI Diagnose (Wat ziet Gemini?)", expanded=False):
-        st.write("De AI stuurde dit terug:")
-        st.text_area("Raw Response", full_ai_response, height=150)
+    # Optioneel: Laat zien wat er gelezen is als er niets gevonden werd (voor debugging)
+    if not date_found and all_detected_text:
+        with st.expander("Gezien tekst (Debug)"):
+            st.write(all_detected_text)
