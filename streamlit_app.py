@@ -11,14 +11,9 @@ import tempfile
 # 1. SETUP & STYLE
 # ==========================================
 st.set_page_config(page_title="Date Scanner", page_icon="📅")
-
-# API KEY
 API_KEY = "AIzaSyALqJ7iSB7Ifhy_Ym-b7Hkks5dpMava18I"
 genai.configure(api_key=API_KEY)
 
-# ==========================================
-# 2. JOUW SPECIFIEKE BIBLIOTHEEK 📚
-# ==========================================
 TIPS_DB = {
     "Butter": "This is butter. Check the top of the lid.",
     "Soda can": "This is a soda can. The date is usually on the bottom.",
@@ -29,39 +24,30 @@ TIPS_DB = {
 }
 
 # ==========================================
-# 3. FIX VOOR DEPTHWISECONV2D 🛠️
+# 2. DE "CLEAN" FIX VOOR DE TENSOR ERROR 🛠️
 # ==========================================
+@tf.keras.utils.register_keras_serializable()
 class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
     def __init__(self, **kwargs):
-        # Verwijder 'groups' parameter die problemen veroorzaakt
         kwargs.pop('groups', None)
         super().__init__(**kwargs)
 
 # ==========================================
-# 4. CSS VOOR BLAUWE KNOP & DESIGN 🎨
+# 3. CSS DESIGN 🎨
 # ==========================================
 st.markdown("""
     <style>
     .stApp { background-color: #000000; color: white; }
     h1 { color: #3b82f6; text-align: center; font-family: sans-serif; font-weight: 800; }
-    
-    /* Maak de camera knop blauw */
     div[data-testid="stCameraInput"] button {
         background-color: #3b82f6 !important;
         color: white !important;
-        border: none !important;
-        padding: 10px !important;
         border-radius: 10px !important;
         font-weight: bold !important;
-        text-transform: uppercase !important;
     }
-    
-    /* Styling van de containers */
     div[data-testid="stCameraInput"] { border-radius: 20px; border: 2px solid #333; overflow: hidden; }
     .success-box { background: #1f2937; border-left: 8px solid #16a34a; padding: 20px; border-radius: 15px; margin-top: 20px; }
     .error-box { background: #1f2937; border-left: 8px solid #dc2626; padding: 20px; border-radius: 15px; margin-top: 20px; }
-    
-    /* Verberg audio player */
     audio { display: none; }
     </style>
     """, unsafe_allow_html=True)
@@ -69,17 +55,31 @@ st.markdown("""
 st.title("📅 Date Scanner")
 
 # ==========================================
-# 5. MODEL LADEN (DEFINITIEVE FIX)
+# 4. MODEL LADEN (De Wrapper Methode)
 # ==========================================
 @st.cache_resource
 def load_model():
     model = None
     labels = []
     try:
+        # Wis oude sessies
+        tf.keras.backend.clear_session()
+        
         if os.path.exists("keras_model.h5"):
-            # Laad met custom_object_scope om de CustomDepthwiseConv2D te gebruiken
-            with tf.keras.utils.custom_object_scope({'DepthwiseConv2D': CustomDepthwiseConv2D}):
-                model = tf.keras.models.load_model("keras_model.h5", compile=False)
+            # We laden het model in
+            raw_model = tf.keras.models.load_model(
+                "keras_model.h5", 
+                custom_objects={'DepthwiseConv2D': CustomDepthwiseConv2D},
+                compile=False
+            )
+            
+            # DIT IS DE FIX: We maken een nieuwe functie die ALTIJD 1 input geeft
+            # en alle extra 'mask' of 'training' troep negeert.
+            @tf.function(input_signature=[tf.TensorSpec(shape=[None, 224, 224, 3], dtype=tf.float32)])
+            def predict_fn(img):
+                return raw_model(img, training=False)
+            
+            model = predict_fn
             
         if os.path.exists("labels.txt"):
             with open("labels.txt", "r") as f:
@@ -90,44 +90,44 @@ def load_model():
             
     return model, labels
 
-model, class_names = load_model()
+model_fn, class_names = load_model()
 
 # ==========================================
-# 6. CAMERA & ANALYSE
+# 5. CAMERA & ANALYSE
 # ==========================================
 img_file = st.camera_input("Scan Product", label_visibility="collapsed")
 
 if img_file is not None:
-    # A. VOORBEREIDEN
     image_pil = Image.open(img_file).convert('RGB')
-    
-    # Gebruik Teachable Machine format (224x224)
     size = (224, 224)
     image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
     image_array = np.asarray(image_resized)
     
-    # Normaliseren PRECIES zoals TM: van 0-255 naar -1 tot 1
+    # Normaliseren
     normalized = (image_array.astype(np.float32) / 127.5) - 1
-    data = np.expand_dims(normalized, axis=0) # Dit maakt de shape correct (1, 224, 224, 3)
+    data = np.expand_dims(normalized, axis=0) 
+    # Converteren naar Tensor voor de wrapper functie
+    input_tensor = tf.convert_to_tensor(data)
 
-    # B. HERKENNEN (Jouw Model)
     product_name = "Background"
     confidence = 0.0
     
-    if model:
+    if model_fn:
         try:
-            # We voeren de voorspelling uit
-            prediction = model.predict(data, verbose=0)
-            index = np.argmax(prediction)
-            confidence = prediction[0][index]
+            # We roepen de wrapper functie aan ipv het model direct
+            prediction = model_fn(input_tensor)
+            # Converteren terug naar numpy voor verwerking
+            pred_array = prediction.numpy()
+            index = np.argmax(pred_array)
+            confidence = pred_array[0][index]
             
-            if confidence > 0.6: # Iets strenger voor minder fouten
+            if confidence > 0.6:
                 raw = class_names[index]
                 product_name = raw.split(" ", 1)[1] if " " in raw else raw
         except Exception as e:
             st.error(f"Prediction Error: {e}")
 
-    # C. DATUM ZOEKEN (Gemini)
+    # Gemini Datum Zoeken
     date_text = "NULL"
     if product_name != "Background":
         with st.spinner(f'Identifying {product_name}...'):
@@ -138,7 +138,7 @@ if img_file is not None:
                 date_text = res.text.strip()
             except: pass
 
-    # D. OUTPUT & AUDIO
+    # OUTPUT & AUDIO
     found = "NULL" not in date_text and len(date_text) > 4
     intro_text = TIPS_DB.get(product_name, TIPS_DB["Background"])
     
@@ -148,26 +148,24 @@ if img_file is not None:
     elif found:
         st.markdown(f"""
         <div class="success-box">
-            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase;">Product</div>
-            <div style="color: white; font-size: 1.6em; font-weight: bold;">{product_name}</div>
-            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase; margin-top: 10px;">Expiration Date</div>
+            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase;">Product Identified</div>
+            <div style="color: white; font-size: 1.6em; font-weight: bold; margin-bottom: 5px;">{product_name}</div>
+            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase;">Expiration Date</div>
             <div style="color: #16a34a; font-size: 2.2em; font-weight: 900;">{date_text}</div>
-            <div style="color: #d1fae5; margin-top: 5px; font-weight: bold;">✅ Safe to consume</div>
         </div>
         """, unsafe_allow_html=True)
         speak_text = f"{intro_text} The date is {date_text}."
     else:
         st.markdown(f"""
         <div class="error-box">
-            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase;">Product</div>
-            <div style="color: white; font-size: 1.6em; font-weight: bold;">{product_name}</div>
-            <div style="color: #dc2626; font-size: 1.5em; font-weight: bold; margin-top: 10px;">Date Not Found</div>
-            <div style="color: #fbbf24; margin-top: 5px; font-weight: bold;">💡 Tip: {intro_text}</div>
+            <div style="color: #9ca3af; font-size: 0.8em; text-transform: uppercase;">Product Identified</div>
+            <div style="color: white; font-size: 1.6em; font-weight: bold; margin-bottom: 5px;">{product_name}</div>
+            <div style="color: #dc2626; font-size: 1.5em; font-weight: bold;">Date Not Found</div>
+            <p style="color: #fbbf24; margin-top: 10px;">💡 {intro_text}</p>
         </div>
         """, unsafe_allow_html=True)
-        speak_text = f"Product identified as {product_name}, but no date was found. {intro_text}"
+        speak_text = f"I see the {product_name}, but no date. {intro_text}"
 
-    # E. AUDIO (AUTOPLAY)
     try:
         tts = gTTS(speak_text, lang='en', tld='com')
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
