@@ -12,7 +12,7 @@ import re
 # ==========================================
 # 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
+st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
 
 TIPS_DB = {
     "Butter": "Check the top of the lid.",
