@@ -10,9 +10,9 @@ import tempfile
 import re
 
 # ==========================================
-# 1. SETUP & STYLE (Originele Mobiele Versie)
+# 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner V5 - Local OCR", page_icon="📅")
+st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
 
 TIPS_DB = {
     "Butter": "Check the top of the lid.",
@@ -38,29 +38,43 @@ st.markdown("""
 st.title("📅 Date Scanner")
 
 # ==========================================
-# 2. MODELLEN LADEN (Cached)
+# 2. HULPFUNCTIES (Mensentaal & Modellen)
 # ==========================================
-@st.cache_resource
-def load_ocr_reader():
-    # Laadt de lokale OCR (Nederlands en Engels)
-    return easyocr.Reader(['nl', 'en'], gpu=False)
+def format_date_to_human(date_str):
+    """Zet 12/10/2025 om naar 'The twelfth of October twenty twenty-five'"""
+    months = ["", "January", "February", "March", "April", "May", "June", 
+              "July", "August", "September", "October", "November", "December"]
+    
+    # Zoek naar dag, maand en jaar
+    match = re.search(r'(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})', date_str)
+    if match:
+        d, m, y = match.groups()
+        day = int(d)
+        month = int(m)
+        year = y if len(y) == 4 else f"20{y}"
+        
+        # Simpele ordinalen voor de dag
+        if 11 <= day <= 13: suffix = "th"
+        else: suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+        
+        if 1 <= month <= 12:
+            return f"the {day}{suffix} of {months[month]}, {year}"
+    return date_str
 
 @st.cache_resource
-def load_tflite_model():
+def load_models():
+    reader = easyocr.Reader(['en'], gpu=False)
     interpreter = None
     labels = []
-    try:
-        if os.path.exists("model_unquant.tflite"):
-            interpreter = tf.lite.Interpreter(model_path="model_unquant.tflite")
-            interpreter.allocate_tensors()
-        if os.path.exists("labels.txt"):
-            with open("labels.txt", "r") as f:
-                labels = [line.strip() for line in f.readlines()]
-    except: pass
-    return interpreter, labels
+    if os.path.exists("model_unquant.tflite"):
+        interpreter = tf.lite.Interpreter(model_path="model_unquant.tflite")
+        interpreter.allocate_tensors()
+    if os.path.exists("labels.txt"):
+        with open("labels.txt", "r") as f:
+            labels = [line.strip() for line in f.readlines()]
+    return reader, interpreter, labels
 
-reader = load_ocr_reader()
-interpreter, class_names = load_tflite_model()
+reader, interpreter, class_names = load_models()
 
 # ==========================================
 # 3. CAMERA & ANALYSE
@@ -68,48 +82,43 @@ interpreter, class_names = load_tflite_model()
 img_file = st.camera_input("Scan", label_visibility="collapsed")
 
 if img_file:
-    # Converteren naar OpenCV formaat voor EasyOCR
+    # Voorbereiding afbeelding
     file_bytes = np.asarray(bytearray(img_file.read()), dtype=np.uint8)
     image_cv = cv2.imdecode(file_bytes, 1)
-    image_rgb = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
-    image_pil = Image.fromarray(image_rgb)
+    image_pil = Image.fromarray(cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB))
     
     date_found = False
     date_text = ""
-    all_detected_text = []
+    spoken_date = ""
 
-    with st.spinner('Lokaal scannen naar datum...'):
+    with st.spinner('Scanning...'):
         try:
-            # STAP 1: Lokale OCR uitvoeren
+            # Stap 1: OCR
             results = reader.readtext(image_cv)
-            
-            # Alle gevonden tekst verzamelen
             for (bbox, text, prob) in results:
-                all_detected_text.append(text)
-                
-                # Direct zoeken naar datum patronen (bv. 12/10/2025 of 12-2025)
-                # Deze Regex is zeer breed voor Europese datumnotaties
-                match = re.search(r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(\d{1,2}[./-]\d{2,4})', text)
-                if match:
-                    date_text = match.group(0)
-                    date_found = True
-                    break # We hebben een datum, stop met zoeken
-        except Exception as e:
-            st.error(f"OCR Fout: {e}")
+                # We zoeken specifiek naar patronen die op een datum lijken
+                if any(c.isdigit() for c in text) and len(text) >= 5:
+                    match = re.search(r'(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})|(\d{1,2}[./-]\d{2,4})', text)
+                    if match:
+                        date_text = match.group(0)
+                        spoken_date = format_date_to_human(date_text)
+                        date_found = True
+                        break
+        except: pass
 
-    # STAP 2: RESULTAAT TONEN
+    # STAP 2: Resultaat tonen
     if date_found:
         st.markdown(f'''<div class="success-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Status</div>
-            <div style="color:white;font-size:1.6em;font-weight:bold;">Datum Gevonden</div>
-            <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Vervaldatum</div>
+            <div style="color:white;font-size:1.6em;font-weight:bold;">Date Found</div>
+            <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div>
             <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div>
-            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Lokaal herkend</div>
+            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Scanner ready</div>
         </div>''', unsafe_allow_html=True)
-        speak_text = f"The expiration date is {date_text}"
+        speak_text = f"The expiration date is {spoken_date}"
         
     else:
-        # GEEN DATUM GEVONDEN -> Gebruik Teachable Machine voor Tips
+        # Stap 3: Teachable Machine (Productherkenning voor tips)
         size = (224, 224)
         image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
         image_array = np.asarray(image_resized).astype(np.float32)
@@ -134,20 +143,15 @@ if img_file:
         st.markdown(f'''<div class="error-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div>
-            <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ Geen datum herkend</div>
-            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 Tip: {tip}</p>
+            <div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ No date found</div>
+            <p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 {tip}</p>
         </div>''', unsafe_allow_html=True)
         speak_text = f"I see {product_name}, but no date. {tip}"
 
-    # AUDIO VOORLEZEN
+    # AUDIO UITVOER
     try:
         tts = gTTS(speak_text, lang='en', tld='com')
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
             tts.save(fp.name)
             st.audio(fp.name, format="audio/mp3", autoplay=True)
     except: pass
-
-    # Optioneel: Laat zien wat er gelezen is als er niets gevonden werd (voor debugging)
-    if not date_found and all_detected_text:
-        with st.expander("Gezien tekst (Debug)"):
-            st.write(all_detected_text)
