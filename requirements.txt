@@ -1,6 +1,6 @@
 streamlit
-tensorflow==2.15.0
-numpy==1.24.3
-Pillow==9.4.0
+tensorflow-cpu
+numpy
+Pillow
 google-generativeai
 gTTS
