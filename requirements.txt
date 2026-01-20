@@ -1,6 +1,10 @@
 streamlit
-tensorflow-cpu
-numpy
+easyocr
+opencv-python-headless
+tensorflow
 Pillow
-google-generativeai
+numpy
 gTTS
+torch
+torchvision
+google-generativeai
