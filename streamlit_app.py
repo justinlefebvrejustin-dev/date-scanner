@@ -8,7 +8,7 @@ from gtts import gTTS
 import tempfile
 
 # ==========================================
-# 1. SETUP & STYLE (Originele Mobiele Versie)
+# 1. SETUP & STYLE
 # ==========================================
 st.set_page_config(page_title="Date Scanner V5", page_icon="📅")
 API_KEY = "AIzaSyBdkCUwIwyY" + "V9Jcu5_ucm3In9A9Z_vx5b4"
@@ -69,57 +69,58 @@ if img_file:
     date_text = ""
     product_name_from_ai = ""
     
-    with st.spinner('AI is analyzing...'):
+    with st.spinner('Scanning...'):
         try:
-            # Gebruik gemini-1.5-flash (stabiele versie)
-            model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+            # GEBRUIK 'gemini-1.5-flash-latest' VOOR MAXIMALE COMPATIBILITEIT
+            gemini = genai.GenerativeModel('gemini-1.5-flash-latest')
             
-            prompt = """Analyze this image very carefully.
-            1. Look for any date (expiration date, best before, THT, or EXP).
-            2. Identify the product name.
+            prompt = """Look at the text in this image.
+1. Find the expiration date (THT/EXP).
+2. Identify the product.
+
+Respond ONLY with:
+PRODUCT: [name]
+DATE: [date]
+
+If no date is found, respond ONLY with:
+PRODUCT: [name]
+DATE: NULL"""
             
-            Format your response EXACTLY like this:
-            PRODUCT: [product name]
-            DATE: [date found or NULL]"""
+            res = gemini.generate_content([prompt, image_pil])
+            response = res.text.strip()
             
-            res = model.generate_content([prompt, image_pil])
-            response_text = res.text.strip()
+            # Parsing antwoord (robuuster gemaakt)
+            for line in response.split('\n'):
+                line = line.replace('*', '').strip()
+                if 'PRODUCT:' in line.upper():
+                    product_name_from_ai = line.split(':', 1)[1].strip()
+                if 'DATE:' in line.upper():
+                    date_text = line.split(':', 1)[1].strip()
             
-            # Robuuste parsing van het antwoord
-            for line in response_text.split('\n'):
-                clean_line = line.replace('*', '').strip() # Verwijder markdown
-                if 'PRODUCT:' in clean_line.upper():
-                    product_name_from_ai = clean_line.split(':', 1)[1].strip()
-                if 'DATE:' in clean_line.upper():
-                    potential_date = clean_line.split(':', 1)[1].strip()
-                    # Check of het geen NULL is en of er minstens een cijfer in staat
-                    if potential_date.upper() != 'NULL' and any(char.isdigit() for char in potential_date):
-                        date_text = potential_date
-                        date_found = True
-                        
+            # Controle of datum echt gevonden is
+            if date_text and 'NULL' not in date_text.upper() and any(c.isdigit() for c in date_text):
+                date_found = True
+                
         except Exception as e:
-            # Als er een 404 of andere API fout is, loggen we het kort en gaan we door
-            st.warning("Gemini is currently unavailable, switching to product tips.")
-            print(f"DEBUG: {e}")
+            # Bij een echte error tonen we deze, anders gaat hij naar de tips
+            st.error(f"Connectie-fout: {e}")
     
     # STAP 2: Resultaat tonen
-    speak_text = ""
-    
     if date_found:
-        # DATUM GEVONDEN - Direct tonen en voorlezen
-        product_display = product_name_from_ai if product_name_from_ai else "product"
+        # DATUM GEVONDEN
+        product_display = product_name_from_ai if product_name_from_ai else "Product"
         st.markdown(f'''<div class="success-box">
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div>
             <div style="color:white;font-size:1.6em;font-weight:bold;">{product_display}</div>
             <div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div>
             <div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div>
-            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Date detected by AI</div>
+            <div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Date detected</div>
         </div>''', unsafe_allow_html=True)
         
         speak_text = f"The date for this {product_display} is {date_text}"
         
     else:
-        # GEEN DATUM - Overschakelen naar Teachable Machine voor tips
+        # GEEN DATUM - Teachable Machine voor tips
         size = (224, 224)
         image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
         image_array = np.asarray(image_resized).astype(np.float32)
@@ -147,7 +148,7 @@ if img_file:
         tip = TIPS_DB.get(product_name, TIPS_DB["Background"])
         
         if product_name == "Background":
-            st.markdown(f'<div class="error-box"><h3>🔍 No product detected</h3><p>{tip}</p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="error-box"><h3>🔍 No product or date found</h3><p>{tip}</p></div>', unsafe_allow_html=True)
             speak_text = tip
         else:
             st.markdown(f'''<div class="error-box">
@@ -158,11 +159,10 @@ if img_file:
             </div>''', unsafe_allow_html=True)
             speak_text = f"I see {product_name}. {tip}"
     
-    # AUDIO UITVOER
-    if speak_text:
-        try:
-            tts = gTTS(speak_text, lang='en', tld='com')
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-                tts.save(fp.name)
-                st.audio(fp.name, format="audio/mp3", autoplay=True)
-        except: pass
+    # AUDIO
+    try:
+        tts = gTTS(speak_text, lang='en', tld='com')
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+            tts.save(fp.name)
+            st.audio(fp.name, format="audio/mp3", autoplay=True)
+    except: pass
