@@ -2,5 +2,5 @@ streamlit
 tensorflow-cpu
 numpy
 Pillow
-pip install -U google-generativeai
+google-generativeai
 gTTS
