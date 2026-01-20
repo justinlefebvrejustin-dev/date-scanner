@@ -10,7 +10,7 @@ import tempfile
 # ==========================================
 # 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
+st.set_page_config(page_title="Date Scanner 3", page_icon="📅")
 API_KEY = "AIzaSyALqJ7iSB7Ifhy" + "_Ym-b7Hkks5dpMava18I"
 genai.configure(api_key=API_KEY)
 
@@ -74,68 +74,74 @@ img_file = st.camera_input("Scan", label_visibility="collapsed")
 if img_file:
     image_pil = Image.open(img_file).convert('RGB')
     
-    # Pre-processing (224x224)
-    size = (224, 224)
-    image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
-    image_array = np.asarray(image_resized).astype(np.float32)
-    normalized = (image_array / 127.5) - 1
-    input_data = np.expand_dims(normalized, axis=0)
-
-    product_name = "Background"
-    confidence = 0.0
-    
-    if interpreter:
-        try:
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            
-            # DEBUG: Toon input/output shapes
-            st.write(f"🔍 DEBUG - Input shape expected: {input_details[0]['shape']}")
-            st.write(f"🔍 DEBUG - Input shape provided: {input_data.shape}")
-            
-            interpreter.set_tensor(input_details[0]['index'], input_data)
-            interpreter.invoke()
-            prediction = interpreter.get_tensor(output_details[0]['index'])
-            
-            index = np.argmax(prediction)
-            confidence = prediction[0][index]
-            
-            # DEBUG: Toon alle predictions
-            st.write(f"🔍 DEBUG - All predictions: {prediction[0]}")
-            st.write(f"🔍 DEBUG - Best match index: {index}, confidence: {confidence:.2%}")
-            
-            if confidence > 0.5:  # Lager confidence threshold voor testen
-                raw = class_names[index]
-                product_name = raw.split(" ", 1)[1] if " " in raw else raw
-                st.write(f"✅ Detected: {product_name} ({confidence:.2%})")
-            else:
-                st.write(f"⚠️ Low confidence: {class_names[index]} ({confidence:.2%})")
-        except Exception as e:
-            st.error(f"Prediction error: {e}")
-
-    # Gemini Datum Zoeken
+    # STAP 1: EERST GEMINI - Zoek datum direct op foto
     date_text = "NULL"
-    if product_name != "Background":
-        with st.spinner(f'Analyzing {product_name}...'):
-            try:
-                gemini = genai.GenerativeModel('gemini-1.5-flash')
-                res = gemini.generate_content([f"Find the expiration date on this {product_name}. Reply ONLY with the date or NULL.", image_pil])
-                date_text = res.text.strip()
-            except: pass
-
-    # Resultaat & Audio
-    found = "NULL" not in date_text and len(date_text) > 4
-    intro = TIPS_DB.get(product_name, TIPS_DB["Background"])
+    product_from_gemini = None
     
-    if product_name == "Background":
-        st.markdown(f'<div class="error-box"><h3>🔍 No product?</h3><p>{intro}</p></div>', unsafe_allow_html=True)
-        speak = intro
-    elif found:
-        st.markdown(f'<div class="success-box"><div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div><div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div><div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div><div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div></div>', unsafe_allow_html=True)
-        speak = f"{intro} The date is {date_text}"
+    with st.spinner('Searching for expiration date...'):
+        try:
+            gemini = genai.GenerativeModel('gemini-1.5-flash')
+            res = gemini.generate_content([
+                "Find ANY expiration date on this product image. Look for dates in ANY format (DD/MM/YYYY, MM/YYYY, DD-MM-YY, etc). Also tell me what product this is. Reply in format: 'PRODUCT: [name] | DATE: [date]' or 'DATE: NULL' if no date found.",
+                image_pil
+            ])
+            response = res.text.strip()
+            
+            # Parse response
+            if "PRODUCT:" in response and "DATE:" in response:
+                parts = response.split("|")
+                product_from_gemini = parts[0].replace("PRODUCT:", "").strip()
+                date_text = parts[1].replace("DATE:", "").strip()
+            elif "DATE:" in response:
+                date_text = response.replace("DATE:", "").strip()
+        except:
+            pass
+
+    # Check of datum gevonden is
+    date_found = "NULL" not in date_text and len(date_text) > 3
+    
+    if date_found:
+        # DATUM GEVONDEN! Gebruik product naam van Gemini
+        product_display = product_from_gemini if product_from_gemini else "product"
+        st.markdown(f'<div class="success-box"><div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div><div style="color:white;font-size:1.6em;font-weight:bold;">{product_display}</div><div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;margin-top:10px;">Expiration Date</div><div style="color:#16a34a;font-size:2.2em;font-weight:900;">{date_text}</div><div style="color:#d1fae5;margin-top:5px;font-weight:bold;">✅ Safe to consume</div></div>', unsafe_allow_html=True)
+        speak = f"This is {product_display} and the date is {date_text}"
+        
     else:
-        st.markdown(f'<div class="error-box"><div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product</div><div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div><div style="color:#dc2626;font-size:1.5em;font-weight:bold;margin-top:10px;">Date Not Found</div><p style="color:#fbbf24;margin-top:10px;">💡 {intro}</p></div>', unsafe_allow_html=True)
-        speak = f"I see the {product_name}, but no date. {intro}"
+        # GEEN DATUM - Gebruik Teachable Machine voor product herkenning + tips
+        size = (224, 224)
+        image_resized = ImageOps.fit(image_pil, size, Image.Resampling.LANCZOS)
+        image_array = np.asarray(image_resized).astype(np.float32)
+        normalized = (image_array / 127.5) - 1
+        input_data = np.expand_dims(normalized, axis=0)
+
+        product_name = "Background"
+        
+        if interpreter:
+            try:
+                input_details = interpreter.get_input_details()
+                output_details = interpreter.get_output_details()
+                interpreter.set_tensor(input_details[0]['index'], input_data)
+                interpreter.invoke()
+                prediction = interpreter.get_tensor(output_details[0]['index'])
+                
+                index = np.argmax(prediction)
+                confidence = prediction[0][index]
+                
+                if confidence > 0.5:
+                    raw = class_names[index]
+                    product_name = raw.split(" ", 1)[1] if " " in raw else raw
+            except:
+                pass
+        
+        # Toon feedback met tips
+        tip = TIPS_DB.get(product_name, TIPS_DB["Background"])
+        
+        if product_name == "Background":
+            st.markdown(f'<div class="error-box"><h3>🔍 No product detected</h3><p>{tip}</p></div>', unsafe_allow_html=True)
+            speak = tip
+        else:
+            st.markdown(f'<div class="error-box"><div style="color:#9ca3af;font-size:0.8em;text-transform:uppercase;">Product Detected</div><div style="color:white;font-size:1.6em;font-weight:bold;">{product_name}</div><div style="color:#dc2626;font-size:1.3em;font-weight:bold;margin-top:10px;">⚠️ No Date Found</div><p style="color:#fbbf24;margin-top:15px;font-size:1.1em;">💡 {tip}</p></div>', unsafe_allow_html=True)
+            speak = f"I see this is {product_name}, so {tip}"
 
     try:
         tts = gTTS(speak, lang='en', tld='com')
