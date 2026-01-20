@@ -50,9 +50,16 @@ def load_tflite_model():
             # TFLite Interpreter is veel lichter en stabieler
             interpreter = tf.lite.Interpreter(model_path=model_path)
             interpreter.allocate_tensors()
+            st.success("✅ Model loaded successfully!")
+        else:
+            st.error(f"❌ Model file not found: {model_path}")
+            
         if os.path.exists("labels.txt"):
             with open("labels.txt", "r") as f:
                 labels = [line.strip() for line in f.readlines()]
+            st.info(f"📋 Loaded {len(labels)} labels: {labels}")
+        else:
+            st.error("❌ labels.txt not found")
     except Exception as e:
         st.error(f"Error: {e}")
     return interpreter, labels
@@ -75,16 +82,36 @@ if img_file:
     input_data = np.expand_dims(normalized, axis=0)
 
     product_name = "Background"
+    confidence = 0.0
+    
     if interpreter:
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        interpreter.set_tensor(input_details[0]['index'], input_data)
-        interpreter.invoke()
-        prediction = interpreter.get_tensor(output_details[0]['index'])
-        index = np.argmax(prediction)
-        if prediction[0][index] > 0.6:
-            raw = class_names[index]
-            product_name = raw.split(" ", 1)[1] if " " in raw else raw
+        try:
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            
+            # DEBUG: Toon input/output shapes
+            st.write(f"🔍 DEBUG - Input shape expected: {input_details[0]['shape']}")
+            st.write(f"🔍 DEBUG - Input shape provided: {input_data.shape}")
+            
+            interpreter.set_tensor(input_details[0]['index'], input_data)
+            interpreter.invoke()
+            prediction = interpreter.get_tensor(output_details[0]['index'])
+            
+            index = np.argmax(prediction)
+            confidence = prediction[0][index]
+            
+            # DEBUG: Toon alle predictions
+            st.write(f"🔍 DEBUG - All predictions: {prediction[0]}")
+            st.write(f"🔍 DEBUG - Best match index: {index}, confidence: {confidence:.2%}")
+            
+            if confidence > 0.5:  # Lager confidence threshold voor testen
+                raw = class_names[index]
+                product_name = raw.split(" ", 1)[1] if " " in raw else raw
+                st.write(f"✅ Detected: {product_name} ({confidence:.2%})")
+            else:
+                st.write(f"⚠️ Low confidence: {class_names[index]} ({confidence:.2%})")
+        except Exception as e:
+            st.error(f"Prediction error: {e}")
 
     # Gemini Datum Zoeken
     date_text = "NULL"
