@@ -29,15 +29,7 @@ TIPS_DB = {
 }
 
 # ==========================================
-# 3. FIX VOOR DE RODE ERROR (INPUT TENSORS) 🛠️
-# ==========================================
-class CustomDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
-    def __init__(self, **kwargs):
-        kwargs.pop('groups', None)
-        super().__init__(**kwargs)
-
-# ==========================================
-# 4. CSS VOOR BLAUWE KNOP & DESIGN 🎨
+# 3. CSS VOOR BLAUWE KNOP & DESIGN 🎨
 # ==========================================
 st.markdown("""
     <style>
@@ -68,7 +60,7 @@ st.markdown("""
 st.title("📅 Date Scanner")
 
 # ==========================================
-# 5. MODEL LADEN (AANGEPAST VOOR DE ERROR)
+# 4. MODEL LADEN (GEFIXTE VERSIE)
 # ==========================================
 @st.cache_resource
 def load_model():
@@ -76,24 +68,43 @@ def load_model():
     labels = []
     try:
         if os.path.exists("keras_model.h5"):
-            # De fix: We laden het model in zonder de 'functional' wraps te forceren
-            # Dit voorkomt de 'expects 1 input, received 2' error
-            model = tf.keras.models.load_model(
-                "keras_model.h5", 
-                custom_objects={'DepthwiseConv2D': CustomDepthwiseConv2D},
-                compile=False
-            )
+            # Fix voor Teachable Machine models
+            # Laad zonder custom objects - simpelste aanpak
+            from tensorflow.keras.models import load_model as keras_load
+            model = keras_load("keras_model.h5", compile=False)
+            
         if os.path.exists("labels.txt"):
             with open("labels.txt", "r") as f:
                 labels = [line.strip() for line in f.readlines()]
+                
     except Exception as e:
         st.error(f"Error loading model: {e}")
+        # Probeer alternatieve methode
+        try:
+            with tf.keras.utils.custom_object_scope({}):
+                loaded_model = tf.keras.models.load_model(
+                    "keras_model.h5",
+                    compile=False
+                )
+                # Rebuild het model met cleane structuur
+                if hasattr(loaded_model, 'input') and hasattr(loaded_model, 'output'):
+                    try:
+                        input_layer = loaded_model.input
+                        output_layer = loaded_model.output
+                        model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
+                    except:
+                        model = loaded_model
+                else:
+                    model = loaded_model
+        except Exception as e2:
+            st.error(f"Alternative loading also failed: {e2}")
+            
     return model, labels
 
 model, class_names = load_model()
 
 # ==========================================
-# 6. CAMERA & ANALYSE
+# 5. CAMERA & ANALYSE
 # ==========================================
 img_file = st.camera_input("Scan Product", label_visibility="collapsed")
 
