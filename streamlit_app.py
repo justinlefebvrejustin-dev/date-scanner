@@ -10,7 +10,7 @@ import tempfile
 # ==========================================
 # 1. SETUP & STYLE
 # ==========================================
-st.set_page_config(page_title="Date Scanner 2", page_icon="📅")
+st.set_page_config(page_title="Date Scanner 3", page_icon="📅")
 API_KEY = "AIzaSyALqJ7iSB7Ifhy" + "_Ym-b7Hkks5dpMava18I"
 genai.configure(api_key=API_KEY)
 
