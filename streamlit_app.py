@@ -12,7 +12,7 @@ import tempfile
 # ==========================================
 st.set_page_config(page_title="Date Scanner 5", page_icon="📅")
 # Gebruik de API key uit je Colab voorbeeld
-API_KEY = "AIzaSyCO2VXgEzZyE7ox-eXeTwP5VIb79w3eKp8"
+API_KEY = "AIzaSyALqJ7iSB7Ifhy_Ym-b7Hkks5dpMava18I"
 genai.configure(api_key=API_KEY)
 
 TIPS_DB = {
